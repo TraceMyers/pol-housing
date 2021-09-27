@@ -131,45 +131,45 @@ def do_wait(w_type):
         print('ERROR @ do_wait(): bad argument passed')
     time.sleep(wait_time[0])
 
-def load_zip_data():
-    with open('unsearched_zips.txt', 'r') as unsearched_f:
+def load_county_data():
+    with open('unsearched_counties.txt', 'r') as unsearched_f:
         for line in unsearched_f:
             unsearched.append(line.strip('\n'))
     
-    with open('partly_searched_zips.txt', 'r') as partly_f:
+    with open('partly_searched_counties.txt', 'r') as partly_f:
         for line in partly_f:
             colon_i = line.find(':')
-            zc = line[:colon_i]
+            county = line[:colon_i]
             addresses = line[colon_i+1:].split('||')
             addresses[-1] = addresses[-1].strip('\n')
-            partly_searched.append((zc, addresses))
+            partly_searched.append((county, addresses))
 
-def get_random_zip():
+def get_random_county():
     partly_searched_ct = len(partly_searched)
     if partly_searched_ct > 0:
-        selected_zc_i = random.randint(0,partly_searched_ct-1)
-        ps_zc_data = partly_searched[selected_zc_i]
-        partly_searched.pop(selected_zc_i)
-        return ps_zc_data, True
+        selected_county_i = random.randint(0,partly_searched_ct-1)
+        ps_county_data = partly_searched[selected_county_i]
+        partly_searched.pop(selected_county_i)
+        return ps_county_data, True
     unsearched_ct = len(unsearched)
-    selected_zc_i = random.randint(0, unsearched_ct-1)
-    zc = unsearched[selected_zc_i]
-    unsearched.pop(selected_zc_i)
-    return zc, False
+    selected_county_i = random.randint(0, unsearched_ct-1)
+    county = unsearched[selected_county_i]
+    unsearched.pop(selected_county_i)
+    return county, False
 
-def rewrite_zip_files_on_exit():
+def rewrite_county_files_on_exit():
     for ps in partly_searched:
-        write_partly_searched_zip(ps[0], ps[1])
-    os.remove('partly_searched_zips.txt')
-    os.rename('partly_searched_temp.txt', 'partly_searched_zips.txt')
-    with open('unsearched_zips.txt', 'w') as unsearched_f:
+        write_partly_searched_county(ps[0], ps[1])
+    os.remove('partly_searched_counties.txt')
+    os.rename('partly_searched_temp.txt', 'partly_searched_counties.txt')
+    with open('unsearched_counties.txt', 'w') as unsearched_f:
         for i in range(len(unsearched) - 1):
             unsearched_f.write(f'{unsearched[i]}\n')
         unsearched_f.write(f'{unsearched[-1]}')
 
 # remember to close driver on exit or before getting a new one
 max_wait = 30
-def get_driver(zc, driver=None, short_wait=False):
+def get_driver(county, driver=None, short_wait=False):
     if driver is None:
         driver = webdriver.Chrome()
     driver.get('http://www.zillow.com')
@@ -185,8 +185,8 @@ def get_driver(zc, driver=None, short_wait=False):
 
     try:
         do_wait(Wait.w_medium)
-        for digit in zc:
-            search_box.send_keys(digit)
+        for c in county:
+            search_box.send_keys(c)
             do_wait(Wait.w_typekeys)
         do_wait(Wait.w_typekeys)
         search_box.send_keys(Keys.RETURN)
@@ -250,7 +250,7 @@ def try_get_table(driver, max_wait):
         do_wait(Wait.w_select)
         return True
     except:
-        print('WARNING @ search_zip(): No table view available. Moving on.')
+        print('WARNING @ search_county(): No table view available. Moving on.')
         return False
 
 def try_close_lightbox(driver):
@@ -266,21 +266,16 @@ def try_close_lightbox(driver):
             driver.execute_script('arguments[0].click();', click_away)
             return True
         except:
-            finished_dots = False
             return False
 
-def record_home_data(zc, driver, prev_zip_addresses, lock):
+def record_home_data(county, driver, lock):
     months = [
         'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
     ]
-    file_month_order =[
-        'Sep', 'Oct', 'Nov', 'Dec','Jan', 'Feb', 
-        'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'
-    ]
     file_first_year = 2011
     file_start_index = 0
-    street_address=None
+    do_wait(Wait.w_select)
     try:
         page_source = driver.page_source
         soup = bsoup(page_source, features='html.parser')
@@ -289,15 +284,18 @@ def record_home_data(zc, driver, prev_zip_addresses, lock):
         address_spans = address_chunk.find_all('span', recursive=False)
         street_address = address_spans[0].text.strip(',')
 
-        # if we're looking through a zip code that was partly searched in a previous session and we already looked at this address
-        if street_address in prev_zip_addresses:
-            return False, None
-
         address_remainder = address_spans[1].text.strip()
         city_end_i =  address_remainder.find(',')
         city = address_remainder[:city_end_i].strip()
-        state = address_remainder[city_end_i+1:].split()[0]
+        state_zc = address_remainder[city_end_i+1:].split()
+        state = state_zc[0]
+        zc = state_zc[1]
+    except Exception as e:
+        print('ERROR @ record_home_data(): unable to get address data')
+        print(e)
+        return False
 
+    try:
         zestimates = []
         # TODO: also check for exact dates (sales)
         # zsolds = []
@@ -326,7 +324,7 @@ def record_home_data(zc, driver, prev_zip_addresses, lock):
                 else:
                     # TODO: create error file to output whatever we get that we don't expect. Can then look up the property and figure out why
                     print(f'ERROR @ record_home_data(): {street_address}, {city}, {state} - no k, m, or b in house value string.')
-                    return False, None
+                    return False
                 zestimates.append(td_text_lower)
             month_found_last_iter = False
         if len(zestimates) > 0:
@@ -342,7 +340,12 @@ def record_home_data(zc, driver, prev_zip_addresses, lock):
             file_start_index = yr_diff * 12 - (8 - j)
         else:
             assert 1 == 0
+    except Exception as e:
+        print('ERROR @ record_home_data(): Unable to get price data')
+        print(e)
+        return False
 
+    try:
         components_chunk = soup.body.find('span', attrs={'class': 'ds-bed-bath-living-area-container'})
         components_spans = components_chunk.find_all('span', recursive=True)
         beds = 'NA'
@@ -375,8 +378,12 @@ def record_home_data(zc, driver, prev_zip_addresses, lock):
                     acres = float(k[0])
                 except:
                     pass
+    except Exception as e:
+        print('ERROR @ record_home_data(): unable to get bed, bath, etc data')
+        print(e)
+        return False
         
-        # TODO: change commas in these strings to something else
+    try:
         facts_and_features = soup.body.find_all('li', attrs={'class':"ds-home-fact-list-item"})
         fnf_type = 'NA'
         fnf_year_built = 'NA'
@@ -392,7 +399,8 @@ def record_home_data(zc, driver, prev_zip_addresses, lock):
             if 'No Data' not in feature_val:
                 try:
                     fnf_val = feature_val.split(',')
-                    fnf_val = [item.strip(' ') + '|' for item in fnf_val]
+                    fnf_val = [item.strip(' ') + ',' for item in fnf_val]
+                    fnf_val = [item.strip('|') for item in fnf_val]
                     fnf_val[-1] = fnf_val[-1][:-1]
                     fnf_val = ''.join(fnf_val)
                 except:
@@ -411,33 +419,40 @@ def record_home_data(zc, driver, prev_zip_addresses, lock):
                     fnf_HOA = fnf_val
                 elif 'Lot' in feature_name:
                     fnf_lot = fnf_val
+    except Exception as e:
+        print('ERROR @ record_home_data(): unable to get fnf data')
+        print(e)
+        return False
+
+    try:
         lock.acquire()
         try:
             with open('zest_data.csv', 'a') as data_file:
                 data_file.write(
-                    f'{zc},{street_address},{city},{state},{beds},{baths},{sqft},{acres},'  \
-                    f'{fnf_type},{fnf_year_built},{fnf_heating},{fnf_cooling},{fnf_parking},{fnf_HOA},{fnf_lot},'
+                    f'{county}|{street_address}|{city}|{state}|{zc}|{beds}|{baths}|{sqft}|{acres}|'  \
+                    f'{fnf_type}|{fnf_year_built}|{fnf_heating}|{fnf_cooling}|{fnf_parking}|{fnf_HOA}|{fnf_lot}|'
                 )
                 price_i = 0
                 price_str = ''
                 while price_i < file_start_index:
-                    price_str += 'NA,'
+                    price_str += 'NA|'
                     price_i += 1
                 for price_item in zestimates:
                     price = price_item[1]
-                    price_str += f'{price},'
+                    price_str += f'{price}|'
                     price_i += 1
                 while price_i < 124:
-                    price_str += 'NA,'
+                    price_str += 'NA|'
                     price_i += 1
                 price_str = price_str[:-1] + '\n'
                 data_file.write(price_str)
         finally:
             lock.release()
-        return True, street_address
-    except:
+        return True
+    except Exception as e:
         print('WARNING @ record_home_data(): unable to record home data')
-        return False, street_address
+        print(e)
+        return False
 
 def mouseover_properties(driver, properties, max_hover_ct):
     # hovering over a few random properties to mimic normal browsing
@@ -451,7 +466,7 @@ def mouseover_properties(driver, properties, max_hover_ct):
         do_wait(Wait.w_select)
 
 # if unfinished, return list of gathered addresses
-def search_zip(zc, driver, prev_searched_addresses, lock, queue):
+def search_county(county, driver, prev_searched_addresses, lock, queue):
     max_wait = 40
     try:
         WebDriverWait(driver, max_wait).until(expected_conditions.element_to_be_clickable(
@@ -462,20 +477,12 @@ def search_zip(zc, driver, prev_searched_addresses, lock, queue):
     
     properties = driver.find_elements_by_class_name('property-dot')
     properties_ct = len(properties)
+    county_short = county[:county.find('County')-1]
 
     if properties_ct > 2:
         cur_page = 0        
-
-        
-
         for i in range(2):
-            if i == 1:
-                other_listings_button = driver.find_element_by_xpath('//button[text()="Other listings"]')
-                ActionChains(driver).move_to_element(other_listings_button).perform() 
-                do_wait(Wait.w_mouseover)
-                driver.execute_script('arguments[0].click();', other_listings_button)
-                do_wait(Wait.w_select)
-
+            # Get the number of pages of property cards
             try:
                 page_source = driver.page_source
                 soup = bsoup(page_source, features='html.parser')
@@ -488,62 +495,80 @@ def search_zip(zc, driver, prev_searched_addresses, lock, queue):
                         page_ct = int(k[-1])
             except:
                 page_ct = 1
+
+            # Iterate over all pages
             while cur_page < page_ct:
                 cards = driver.find_elements_by_class_name('list-card')
                 max_hover_ct = 7 if 7 < properties_ct else properties_ct
                 searched_addresses = []
-                no_data_streak = 0
-                for card in cards:
+
+                try:
+                    page_source = driver.page_source
+                    soup = bsoup(page_source, features='html.parser')
+                except:
+                    print('ERROR @ search_county(): unable to collect addresses from cards.')
+                # ... and all property cards
+                for j in range(len(cards)):
+                    # Must repopulate this list at least every few iterations while scrolling down
+                    # because in the HTML, list indices are created but not populated til you scroll near it
+                    cards = driver.find_elements_by_class_name('list-card')
+                    card = cards[j]
+                    mouseover_properties(driver, properties, max_hover_ct)
                     try:
-                        mouseover_properties(driver, properties, max_hover_ct)
-
-                        address_link = driver.find_element_by_xpath("//a[@id='list-card-link-top-margin']").get_attribute("href");
-                        address_link.
-
+                        driver.execute_script('arguments[0].scrollIntoView(true);', card)
+                        do_wait(Wait.w_mouseover)
+                        card_html = str(card.get_attribute('innerHTML'))
+                        address_link_start = card_html.find('a href=') + 8
+                        address_link_end = card_html[address_link_start:].find('"') + address_link_start
+                        address_link = card_html[address_link_start:address_link_end]
+                        address_text_end = address_link[:-1].rfind('/')
+                        address_text_begin = address_link[:address_text_end].rfind('/') + 1
+                        address = address_link[address_text_begin:address_text_end]
+                        print(address)
+                        if address in prev_searched_addresses:
+                            continue
+                        searched_addresses.append(address)
+                    except:
+                        print("ERROR @ search_county(): can't get address from card")
+                        continue
+                    try:
                         ActionChains(driver).move_to_element(card).perform() 
                         do_wait(Wait.w_mouseover)
                         driver.execute_script('arguments[0].click();', card)
-                        
-                        get_table_success = try_get_table(driver, max_wait)
+                    except:
+                        print("ERROR @ search_county(): couldn't click on property card")
+                        continue
+                    try:
+                        get_table_success = try_get_table(driver, max_wait/2)
                         if get_table_success:
-                            record_data_success = record_home_data(zc, driver, prev_searched_addresses, lock)
-                            address = record_data_success[1]
-                            if address != None:
-                                searched_addresses.append(address)
-                                no_data_streak = 0
-                            else:
-                                no_data_streak += 1
-                            try_close_lightbox(driver)
+                            record_data_success = record_home_data(county_short, driver, lock)
+                        try_close_lightbox(driver)
                     except:
                         # if something goes wrong, we're going to write error data, exit data and exit the process
-                        print('ERROR @ search_zip(): Process writing exit data and closing driver after error.')
+                        print('ERROR @ search_county(): Process writing exit data and closing driver after error with table or lightbox.')
                         prev_searched_addresses.extend(searched_addresses)
                         lock.acquire()
                         try:
-                            with open('error_zips.txt', 'a') as error_zips_f:
-                                error_zips_f.write(f'{datetime.datetime.now().date()}: {zc}\n')
-                            write_partly_searched_zip(zc, prev_searched_addresses)
+                            with open('error_counties.txt', 'a') as error_counties_f:
+                                error_counties_f.write(f'{datetime.datetime.now().date()}: {county}\n')
+                            write_partly_searched_county(county, prev_searched_addresses)
                         finally:
                             lock.release()
-                        break
+                        return
                     
-                    # Checking if we got the signal to exit from user input
+                    # Checking if we got the signal to exit from user input; write exit data and exit the process
                     ret = queue.get()
                     if ret['exit'] == True:
                         queue.put(ret)
-                        # write exit data
                         print('Process writing exit data and closing driver after requested exit.')
                         prev_searched_addresses.extend(searched_addresses)
                         lock.acquire()
                         try:
-                            write_partly_searched_zip(zc, prev_searched_addresses)
+                            write_partly_searched_county(county, prev_searched_addresses)
                         finally:
                             lock.release()
-                        break
+                        return
                     queue.put(ret)
-                    if no_data_streak >= 15:
-                        print('No data points found in 15 iterations. exiting zip')
-                    return
 
                 if cur_page < page_ct - 1:
                     next_page_link = driver.find_element_by_xpath("//a[@title='Next page']")
@@ -551,19 +576,30 @@ def search_zip(zc, driver, prev_searched_addresses, lock, queue):
                     next_page_link.click()
                     do_wait(Wait.w_medium)
                 cur_page += 1
+
+            # Once we're done looking through agent listings, switch to other listings
+            try:
+                other_listings_button = driver.find_element_by_xpath('//button[text()="Other listings"]')
+                ActionChains(driver).move_to_element(other_listings_button).perform() 
+                do_wait(Wait.w_mouseover)
+                driver.execute_script('arguments[0].click();', other_listings_button)
+                do_wait(Wait.w_select)
+            except:
+                print('WARNING @ search_county(): no "other listings" button. Exiting county.')
+                break
     else:
         print('not enough properties')
         
-def write_partly_searched_zip(zc, searched_addresses):
+def write_partly_searched_county(county, searched_addresses):
     searched_addresses_ct = len(searched_addresses)
     try:
         assert searched_addresses_ct > 0
     except:
-        print('ERROR: len 0 searched addresses list passed to write_party_searched_zip()')
+        print('ERROR: len 0 searched addresses list passed to write_party_searched_county()')
         return
     
     with open('partly_searched_temp.txt', 'a') as partly_searched_f:
-        partly_searched_f.write(f'{zc}:')
+        partly_searched_f.write(f'{county}:')
         for i in range(searched_addresses_ct - 1):
             address = searched_addresses[i]
             partly_searched_f.write(f'{address}||')
@@ -579,7 +615,7 @@ def wait_for_input_to_exit(queue):
 ret = {'exit': False}
 
 if __name__ == '__main__':
-    load_zip_data()
+    load_county_data()
     queue = Queue()
     queue.put(ret)
     output_lock = Lock()
@@ -594,16 +630,16 @@ if __name__ == '__main__':
     f.close()
 
     for i in range(1):
-        zc_data, is_partly_searched = get_random_zip()
+        county_data, is_partly_searched = get_random_county()
         if is_partly_searched:
-            zc = zc_data[0]
-            prev_searched_addresses = zc_data[1]
+            county = county_data[0]
+            prev_searched_addresses = county_data[1]
         else:
-            zc = zc_data
+            county = county_data
             prev_searched_addresses = []
-        driver = get_driver(zc)
+        driver = get_driver(county)
         drivers.append(driver)
-        p = Process(target=search_zip, args=(zc, driver, prev_searched_addresses, output_lock, queue))
+        p = Process(target=search_county, args=(county, driver, prev_searched_addresses, output_lock, queue))
         p.start()
         p.join()
         search_processes.append(p)
@@ -631,5 +667,5 @@ if __name__ == '__main__':
     
     for driver in drivers:
         driver.close()
-    rewrite_zip_files_on_exit()
+    rewrite_county_files_on_exit()
     print('Fin')
