@@ -247,7 +247,7 @@ def try_get_table(driver, max_wait):
         ))
         do_wait(Wait.w_select)
         driver.execute_script('arguments[0].click();', table_view_button)
-        do_wait(Wait.w_medium)
+        do_wait(Wait.w_select)
         return True
     except:
         print('WARNING @ search_zip(): No table view available. Moving on.')
@@ -462,58 +462,95 @@ def search_zip(zc, driver, prev_searched_addresses, lock, queue):
     
     properties = driver.find_elements_by_class_name('property-dot')
     properties_ct = len(properties)
-    if properties_ct > 2:
-        max_hover_ct = 7 if 7 < properties_ct else properties_ct
-        searched_addresses = []
-        no_data_streak = 0
-        for prop in properties:
-            try:
-                mouseover_properties(driver, properties, max_hover_ct)
 
-                ActionChains(driver).move_to_element(prop).perform() 
+    if properties_ct > 2:
+        cur_page = 0        
+
+        
+
+        for i in range(2):
+            if i == 1:
+                other_listings_button = driver.find_element_by_xpath('//button[text()="Other listings"]')
+                ActionChains(driver).move_to_element(other_listings_button).perform() 
                 do_wait(Wait.w_mouseover)
-                driver.execute_script('arguments[0].click();', prop)
-                
-                get_table_success = try_get_table(driver, max_wait)
-                if get_table_success:
-                    record_data_success = record_home_data(zc, driver, prev_searched_addresses, lock)
-                    address = record_data_success[1]
-                    if address != None:
-                        searched_addresses.append(address)
-                        no_data_streak = 0
-                    else:
-                        no_data_streak += 1
-                    try_close_lightbox(driver)
+                driver.execute_script('arguments[0].click();', other_listings_button)
+                do_wait(Wait.w_select)
+
+            try:
+                page_source = driver.page_source
+                soup = bsoup(page_source, features='html.parser')
+                page_ct_div = soup.body.find('div', attrs={'class':"search-pagination"})
+                page_ct_inner_spans = page_ct_div.find_all('span', recursive=True)
+                for span in page_ct_inner_spans:
+                    txt = span.text
+                    if 'Page' in txt:
+                        k = txt.split(' ')
+                        page_ct = int(k[-1])
             except:
-                # if something goes wrong, we're going to write error data, exit data and exit the process
-                print('ERROR @ search_zip(): Process writing exit data and closing driver after error.')
-                prev_searched_addresses.extend(searched_addresses)
-                lock.acquire()
-                try:
-                    with open('error_zips.txt', 'a') as error_zips_f:
-                        error_zips_f.write(f'{datetime.datetime.now().date()}: {zc}\n')
-                    write_partly_searched_zip(zc, prev_searched_addresses)
-                finally:
-                    lock.release()
-                break
-            
-            # Checking if we got the signal to exit from user input
-            ret = queue.get()
-            if ret['exit'] == True:
-                queue.put(ret)
-                # write exit data
-                print('Process writing exit data and closing driver after requested exit.')
-                prev_searched_addresses.extend(searched_addresses)
-                lock.acquire()
-                try:
-                    write_partly_searched_zip(zc, prev_searched_addresses)
-                finally:
-                    lock.release()
-                break
-            queue.put(ret)
-            if no_data_streak >= 15:
-                print('No data points found in 15 iterations. exiting zip')
-                return
+                page_ct = 1
+            while cur_page < page_ct:
+                cards = driver.find_elements_by_class_name('list-card')
+                max_hover_ct = 7 if 7 < properties_ct else properties_ct
+                searched_addresses = []
+                no_data_streak = 0
+                for card in cards:
+                    try:
+                        mouseover_properties(driver, properties, max_hover_ct)
+
+                        address_link = driver.find_element_by_xpath("//a[@id='list-card-link-top-margin']").get_attribute("href");
+                        address_link.
+
+                        ActionChains(driver).move_to_element(card).perform() 
+                        do_wait(Wait.w_mouseover)
+                        driver.execute_script('arguments[0].click();', card)
+                        
+                        get_table_success = try_get_table(driver, max_wait)
+                        if get_table_success:
+                            record_data_success = record_home_data(zc, driver, prev_searched_addresses, lock)
+                            address = record_data_success[1]
+                            if address != None:
+                                searched_addresses.append(address)
+                                no_data_streak = 0
+                            else:
+                                no_data_streak += 1
+                            try_close_lightbox(driver)
+                    except:
+                        # if something goes wrong, we're going to write error data, exit data and exit the process
+                        print('ERROR @ search_zip(): Process writing exit data and closing driver after error.')
+                        prev_searched_addresses.extend(searched_addresses)
+                        lock.acquire()
+                        try:
+                            with open('error_zips.txt', 'a') as error_zips_f:
+                                error_zips_f.write(f'{datetime.datetime.now().date()}: {zc}\n')
+                            write_partly_searched_zip(zc, prev_searched_addresses)
+                        finally:
+                            lock.release()
+                        break
+                    
+                    # Checking if we got the signal to exit from user input
+                    ret = queue.get()
+                    if ret['exit'] == True:
+                        queue.put(ret)
+                        # write exit data
+                        print('Process writing exit data and closing driver after requested exit.')
+                        prev_searched_addresses.extend(searched_addresses)
+                        lock.acquire()
+                        try:
+                            write_partly_searched_zip(zc, prev_searched_addresses)
+                        finally:
+                            lock.release()
+                        break
+                    queue.put(ret)
+                    if no_data_streak >= 15:
+                        print('No data points found in 15 iterations. exiting zip')
+                    return
+
+                if cur_page < page_ct - 1:
+                    next_page_link = driver.find_element_by_xpath("//a[@title='Next page']")
+                    do_wait(Wait.w_mouseover)
+                    next_page_link.click()
+                    do_wait(Wait.w_medium)
+                cur_page += 1
     else:
         print('not enough properties')
         
@@ -556,7 +593,7 @@ if __name__ == '__main__':
     f = open('partly_searched_temp.txt', 'w')
     f.close()
 
-    for i in range(2):
+    for i in range(1):
         zc_data, is_partly_searched = get_random_zip()
         if is_partly_searched:
             zc = zc_data[0]
@@ -568,28 +605,29 @@ if __name__ == '__main__':
         drivers.append(driver)
         p = Process(target=search_zip, args=(zc, driver, prev_searched_addresses, output_lock, queue))
         p.start()
+        p.join()
         search_processes.append(p)
 
-    while True:
-        time.sleep(5)
-        ret = queue.get()
-        if ret['exit']:
-            queue.put(ret)
-            break
-        queue.put(ret)
-        for i in range(len(search_processes)):
-            p = search_processes[i]
-            if not p.is_alive():
-                zc_data, is_partly_searched = get_random_zip()
-                if is_partly_searched:
-                    zc = zc_data[0]
-                    prev_searched_addresses = zc_data[1]
-                else:
-                    zc = zc_data
-                    prev_searched_addresses = []
-                drivers[i] = get_driver(zc, drivers[i], True)
-                search_processes[i] = Process(target=search_zip, args=(zc, drivers[i], prev_searched_addresses, output_lock, queue))
-                search_processes[i].start()
+    # while True:
+    #     time.sleep(5)
+    #     ret = queue.get()
+    #     if ret['exit']:
+    #         queue.put(ret)
+    #         break
+    #     queue.put(ret)
+    #     for i in range(len(search_processes)):
+    #         p = search_processes[i]
+    #         if not p.is_alive():
+    #             zc_data, is_partly_searched = get_random_zip()
+    #             if is_partly_searched:
+    #                 zc = zc_data[0]
+    #                 prev_searched_addresses = zc_data[1]
+    #             else:
+    #                 zc = zc_data
+    #                 prev_searched_addresses = []
+    #             drivers[i] = get_driver(zc, drivers[i], True)
+    #             search_processes[i] = Process(target=search_zip, args=(zc, drivers[i], prev_searched_addresses, output_lock, queue))
+    #             search_processes[i].start()
     
     for driver in drivers:
         driver.close()
