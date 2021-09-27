@@ -31,9 +31,6 @@ from multiprocessing.dummy import Process, Lock, Queue
 # TODO: NEED thread waiting for input so a quit command can be given and
 # exit data can be written, such as rewriting searched and partly searched files
 
-unsearched = []
-partly_searched = []
-
 class WaitData:
     def __init__(self):
         self.waits_n = 100
@@ -101,6 +98,47 @@ class WaitData:
 
 Wait = WaitData()
 
+class CountyData:
+    def __init__(self):
+        self.unsearched = []
+        self.partly_searched = []
+
+    def load(self):
+        with open('unsearched_counties.txt', 'r') as unsearched_f:
+            for line in unsearched_f:
+                self.unsearched.append(line.strip('\n'))
+        
+        with open('partly_searched_counties.txt', 'r') as partly_f:
+            for line in partly_f:
+                colon_i = line.find(':')
+                county = line[:colon_i]
+                addresses = line[colon_i+1:].split('||')
+                addresses[-1] = addresses[-1].strip('\n')
+                self.partly_searched.append((county, addresses))
+
+    def get_random_county(self):
+        partly_searched_ct = len(self.partly_searched)
+        if partly_searched_ct > 0:
+            selected_county_i = random.randint(0,partly_searched_ct-1)
+            ps_county_data = self.partly_searched[selected_county_i]
+            self.partly_searched.pop(selected_county_i)
+            return ps_county_data, True
+        unsearched_ct = len(self.unsearched)
+        selected_county_i = random.randint(0, unsearched_ct-1)
+        county = self.unsearched[selected_county_i]
+        self.unsearched.pop(selected_county_i)
+        return county, False
+
+    def rewrite_county_files_on_exit(self):
+        for ps in self.partly_searched:
+            write_partly_searched_county(ps[0], ps[1])
+        os.remove('partly_searched_counties.txt')
+        os.rename('partly_searched_temp.txt', 'partly_searched_counties.txt')
+        with open('unsearched_counties.txt', 'w') as unsearched_f:
+            for i in range(len(self.unsearched) - 1):
+                unsearched_f.write(f'{self.unsearched[i]}\n')
+            unsearched_f.write(f'{self.unsearched[-1]}')
+
 def do_wait(w_type):
     if w_type == Wait.w_mouseover:
         wait_time = Wait.mouseover_waits[Wait.mwaits_i]
@@ -130,42 +168,6 @@ def do_wait(w_type):
     else:
         print('ERROR @ do_wait(): bad argument passed')
     time.sleep(wait_time[0])
-
-def load_county_data():
-    with open('unsearched_counties.txt', 'r') as unsearched_f:
-        for line in unsearched_f:
-            unsearched.append(line.strip('\n'))
-    
-    with open('partly_searched_counties.txt', 'r') as partly_f:
-        for line in partly_f:
-            colon_i = line.find(':')
-            county = line[:colon_i]
-            addresses = line[colon_i+1:].split('||')
-            addresses[-1] = addresses[-1].strip('\n')
-            partly_searched.append((county, addresses))
-
-def get_random_county():
-    partly_searched_ct = len(partly_searched)
-    if partly_searched_ct > 0:
-        selected_county_i = random.randint(0,partly_searched_ct-1)
-        ps_county_data = partly_searched[selected_county_i]
-        partly_searched.pop(selected_county_i)
-        return ps_county_data, True
-    unsearched_ct = len(unsearched)
-    selected_county_i = random.randint(0, unsearched_ct-1)
-    county = unsearched[selected_county_i]
-    unsearched.pop(selected_county_i)
-    return county, False
-
-def rewrite_county_files_on_exit():
-    for ps in partly_searched:
-        write_partly_searched_county(ps[0], ps[1])
-    os.remove('partly_searched_counties.txt')
-    os.rename('partly_searched_temp.txt', 'partly_searched_counties.txt')
-    with open('unsearched_counties.txt', 'w') as unsearched_f:
-        for i in range(len(unsearched) - 1):
-            unsearched_f.write(f'{unsearched[i]}\n')
-        unsearched_f.write(f'{unsearched[-1]}')
 
 # remember to close driver on exit or before getting a new one
 max_wait = 30
@@ -539,7 +541,7 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                         print("ERROR @ search_county(): couldn't click on property card")
                         continue
                     try:
-                        get_table_success = try_get_table(driver, max_wait/2)
+                        get_table_success = try_get_table(driver, max_wait)
                         if get_table_success:
                             record_data_success = record_home_data(county_short, driver, lock)
                         try_close_lightbox(driver)
@@ -554,7 +556,7 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                             write_partly_searched_county(county, prev_searched_addresses)
                         finally:
                             lock.release()
-                        return
+                            return
                     
                     # Checking if we got the signal to exit from user input; write exit data and exit the process
                     ret = queue.get()
@@ -615,7 +617,8 @@ def wait_for_input_to_exit(queue):
 ret = {'exit': False}
 
 if __name__ == '__main__':
-    load_county_data()
+    county_data = CountyData()
+    county_data.load()
     queue = Queue()
     queue.put(ret)
     output_lock = Lock()
@@ -629,43 +632,42 @@ if __name__ == '__main__':
     f = open('partly_searched_temp.txt', 'w')
     f.close()
 
-    for i in range(1):
-        county_data, is_partly_searched = get_random_county()
+    for i in range(4):
+        cnty_data, is_partly_searched = county_data.get_random_county()
         if is_partly_searched:
-            county = county_data[0]
-            prev_searched_addresses = county_data[1]
+            county = cnty_data[0]
+            prev_searched_addresses = cnty_data[1]
         else:
-            county = county_data
+            county = cnty_data
             prev_searched_addresses = []
         driver = get_driver(county)
         drivers.append(driver)
         p = Process(target=search_county, args=(county, driver, prev_searched_addresses, output_lock, queue))
         p.start()
-        p.join()
         search_processes.append(p)
 
-    # while True:
-    #     time.sleep(5)
-    #     ret = queue.get()
-    #     if ret['exit']:
-    #         queue.put(ret)
-    #         break
-    #     queue.put(ret)
-    #     for i in range(len(search_processes)):
-    #         p = search_processes[i]
-    #         if not p.is_alive():
-    #             zc_data, is_partly_searched = get_random_zip()
-    #             if is_partly_searched:
-    #                 zc = zc_data[0]
-    #                 prev_searched_addresses = zc_data[1]
-    #             else:
-    #                 zc = zc_data
-    #                 prev_searched_addresses = []
-    #             drivers[i] = get_driver(zc, drivers[i], True)
-    #             search_processes[i] = Process(target=search_zip, args=(zc, drivers[i], prev_searched_addresses, output_lock, queue))
-    #             search_processes[i].start()
+    while True:
+        time.sleep(5)
+        ret = queue.get()
+        if ret['exit']:
+            queue.put(ret)
+            break
+        queue.put(ret)
+        for i in range(len(search_processes)):
+            p = search_processes[i]
+            if not p.is_alive():
+                cnty_data, is_partly_searched = county_data.get_random_county()
+                if is_partly_searched:
+                    county = cnty_data[0]
+                    prev_searched_addresses = cnty_data[1]
+                else:
+                    county = cnty_data
+                    prev_searched_addresses = []
+                drivers[i] = get_driver(county, drivers[i], True)
+                search_processes[i] = Process(target=search_county, args=(county, drivers[i], prev_searched_addresses, output_lock, queue))
+                search_processes[i].start()
     
     for driver in drivers:
         driver.close()
-    rewrite_county_files_on_exit()
+    county_data.rewrite_county_files_on_exit()
     print('Fin')
