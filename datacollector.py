@@ -118,12 +118,14 @@ class CountyData:
 
     def get_random_county(self):
         partly_searched_ct = len(self.partly_searched)
-        if partly_searched_ct > 0:
-            selected_county_i = random.randint(0,partly_searched_ct-1)
-            ps_county_data = self.partly_searched[selected_county_i]
-            self.partly_searched.pop(selected_county_i)
-            return ps_county_data, True
         unsearched_ct = len(self.unsearched)
+        if partly_searched_ct > 0:
+            pick_searched = random.choice([0,1])
+            if pick_searched or unsearched_ct < 1:
+                selected_county_i = random.randint(0,partly_searched_ct-1)
+                ps_county_data = self.partly_searched[selected_county_i]
+                self.partly_searched.pop(selected_county_i)
+                return ps_county_data, True
         selected_county_i = random.randint(0, unsearched_ct-1)
         county = self.unsearched[selected_county_i]
         self.unsearched.pop(selected_county_i)
@@ -138,6 +140,34 @@ class CountyData:
             for i in range(len(self.unsearched) - 1):
                 unsearched_f.write(f'{self.unsearched[i]}\n')
             unsearched_f.write(f'{self.unsearched[-1]}')
+
+class AccountDispenser:
+    def __init__(self):
+        self.usernames = []
+        self.passwords = []
+        self.acct_ctr = 0
+        self.account_ct = 6
+        i = 0
+        with open('account_stuff/account_names.txt', 'r') as acf:
+            for line in acf:
+                username_end = line.rfind(',')
+                username_begin = line[:username_end].rfind(',') + 1
+                username = line[username_begin:username_end]
+                password = line[username_end+1:-1]
+                self.usernames.append(username)
+                self.passwords.append(password)
+                i += 1
+                if i == self.account_ct:
+                    break
+    
+    def get_user_pass(self):
+        user = self.usernames[self.acct_ctr]
+        pwd = self.passwords[self.acct_ctr]
+        self.acct_ctr += 1
+        if self.acct_ctr == self.account_ct:
+            self.acct_ctr = 0
+        return user, pwd
+            
 
 def do_wait(w_type):
     if w_type == Wait.w_mouseover:
@@ -171,10 +201,44 @@ def do_wait(w_type):
 
 # remember to close driver on exit or before getting a new one
 max_wait = 30
-def get_driver(county, driver=None, short_wait=False):
+def get_driver(county, user_pass=None, driver=None, short_wait=False):
     if driver is None:
         driver = webdriver.Chrome()
     driver.get('http://www.zillow.com')
+    if user_pass is not None:
+        try:
+            do_wait(Wait.w_select)
+            sign_in_link = WebDriverWait(driver, max_wait).until(expected_conditions.presence_of_element_located(
+                (By.PARTIAL_LINK_TEXT, 'Sign in')
+            ))
+            driver.execute_script('arguments[0].click();', sign_in_link)
+            print(sign_in_link)
+
+            do_wait(Wait.w_medium)
+            google_btn = driver.find_element_by_xpath('//button[text()="Continue with Google"]')
+            print(google_btn)
+            driver.execute_script('arguments[0].click();', google_btn)
+
+            do_wait(Wait.w_medium)
+            print(driver.window_handles)
+            driver.switch_to_window(driver.window_handles[1])
+
+            email_box = WebDriverWait(driver, max_wait).until(expected_conditions.presence_of_element_located(
+                (By.XPATH, '//input[@type="email"]')
+            ))
+            driver.execute_script('arguments[0].click();', email_box)
+            do_wait(Wait.w_select)
+            for c in user_pass[0]:
+                email_box.send_keys(c)
+                do_wait(Wait.w_typekeys)
+            do_wait(Wait.w_typekeys)
+            email_box.send_keys(Keys.RETURN)
+            input('hit enter when done logging in')
+            
+            driver.switch_to_window(driver.window_handles[0])
+        except:
+            print('ERROR @ get_driver(): login failed returning')
+            return
     try:
         search_box = WebDriverWait(driver, max_wait).until(expected_conditions.presence_of_element_located(
             (By.XPATH, '//input[@type="text"]')
@@ -244,19 +308,18 @@ def get_driver(county, driver=None, short_wait=False):
 def try_get_table(driver, max_wait):
     try:
         # Zillow likes to block you here if you don't wait long enough
-        table_view_button = WebDriverWait(driver, max_wait).until(expected_conditions.element_to_be_clickable(
+        table_view_button = WebDriverWait(driver, max_wait *0.6).until(expected_conditions.element_to_be_clickable(
             (By.XPATH, '//button[normalize-space()="Table view"]')
         ))
         do_wait(Wait.w_select)
         driver.execute_script('arguments[0].click();', table_view_button)
-        do_wait(Wait.w_select)
         return True
     except:
         print('WARNING @ search_county(): No table view available. Moving on.')
         return False
 
 def try_close_lightbox(driver):
-    do_wait(Wait.w_select)
+    do_wait(Wait.w_mouseover)
     try:
         close_lightbox = driver.find_element_by_class_name('ds-close-lightbox-icon')
         driver.execute_script('arguments[0].click();', close_lightbox)
@@ -503,19 +566,35 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                 cards = driver.find_elements_by_class_name('list-card')
                 max_hover_ct = 7 if 7 < properties_ct else properties_ct
                 searched_addresses = []
+                successive_failures = 0
 
-                try:
-                    page_source = driver.page_source
-                    soup = bsoup(page_source, features='html.parser')
-                except:
-                    print('ERROR @ search_county(): unable to collect addresses from cards.')
                 # ... and all property cards
                 for j in range(len(cards)):
                     # Must repopulate this list at least every few iterations while scrolling down
                     # because in the HTML, list indices are created but not populated til you scroll near it
-                    cards = driver.find_elements_by_class_name('list-card')
-                    card = cards[j]
-                    mouseover_properties(driver, properties, max_hover_ct)
+
+                    if successive_failures == 2:
+                        print("ERROR @ search_county(): Exiting search after 3 successive failures.")
+                        prev_searched_addresses.extend(searched_addresses)
+                        lock.acquire()
+                        try:
+                            with open('error_counties.txt', 'a') as error_counties_f:
+                                error_counties_f.write(f'{datetime.datetime.now().date()}: {county}\n')
+                            ret = queue.get()
+                            partly_searched = ret['partly_searched']
+                            partly_searched.append((county, prev_searched_addresses))
+                            queue.put(ret)
+                        finally:
+                            lock.release()
+                        return
+                    try:
+                        WebDriverWait(driver, max_wait).until(expected_conditions.element_to_be_clickable(
+                            (By.CLASS_NAME, 'list-card')
+                        ))
+                        cards = driver.find_elements_by_class_name('list-card')
+                        card = cards[j]
+                    except:
+                        print("ERROR @ search_counties(): can't grab list card")
                     try:
                         driver.execute_script('arguments[0].scrollIntoView(true);', card)
                         do_wait(Wait.w_mouseover)
@@ -532,50 +611,43 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                         searched_addresses.append(address)
                     except:
                         print("ERROR @ search_county(): can't get address from card")
-                        continue
                     try:
+                        mouseover_properties(driver, properties, max_hover_ct)
                         ActionChains(driver).move_to_element(card).perform() 
-                        do_wait(Wait.w_mouseover)
                         driver.execute_script('arguments[0].click();', card)
                     except:
                         print("ERROR @ search_county(): couldn't click on property card")
-                        continue
                     try:
                         get_table_success = try_get_table(driver, max_wait)
-                        if get_table_success:
-                            record_data_success = record_home_data(county_short, driver, lock)
-                        try_close_lightbox(driver)
+                        record_data_success = record_home_data(county_short, driver, lock)
+                        lightbox_close_success = try_close_lightbox(driver)
+                        
+                        if not lightbox_close_success:
+                            successive_failures += 1
+                        else:
+                            successive_failures = 0
                     except:
                         # if something goes wrong, we're going to write error data, exit data and exit the process
-                        print('ERROR @ search_county(): Process writing exit data and closing driver after error with table or lightbox.')
-                        prev_searched_addresses.extend(searched_addresses)
-                        lock.acquire()
-                        try:
-                            with open('error_counties.txt', 'a') as error_counties_f:
-                                error_counties_f.write(f'{datetime.datetime.now().date()}: {county}\n')
-                            write_partly_searched_county(county, prev_searched_addresses)
-                        finally:
-                            lock.release()
-                            return
+                        print('ERROR @ search_county(): error with table or lightbox.')
+                        successive_failures += 1
                     
                     # Checking if we got the signal to exit from user input; write exit data and exit the process
+                    lock.acquire()
                     ret = queue.get()
                     if ret['exit'] == True:
-                        queue.put(ret)
                         print('Process writing exit data and closing driver after requested exit.')
                         prev_searched_addresses.extend(searched_addresses)
-                        lock.acquire()
-                        try:
-                            write_partly_searched_county(county, prev_searched_addresses)
-                        finally:
-                            lock.release()
+                        partly_searched = ret['partly_searched']
+                        partly_searched.append((county, prev_searched_addresses))
+                        queue.put(ret)
                         return
                     queue.put(ret)
+                    lock.release()
 
                 if cur_page < page_ct - 1:
                     next_page_link = driver.find_element_by_xpath("//a[@title='Next page']")
                     do_wait(Wait.w_mouseover)
-                    next_page_link.click()
+                    driver.execute_script('arguments[0].click();', next_page_link)
                     do_wait(Wait.w_medium)
                 cur_page += 1
 
@@ -585,21 +657,22 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                 ActionChains(driver).move_to_element(other_listings_button).perform() 
                 do_wait(Wait.w_mouseover)
                 driver.execute_script('arguments[0].click();', other_listings_button)
-                do_wait(Wait.w_select)
+                do_wait(Wait.w_medium)
             except:
                 print('WARNING @ search_county(): no "other listings" button. Exiting county.')
                 break
     else:
         print('not enough properties')
+    lock.acquire()
+    try:
+        with open('finished_counties.txt', 'a') as fc_f:
+            fc_f.write(f"{county}\n")
+    finally:
+        lock.release()
+    
         
 def write_partly_searched_county(county, searched_addresses):
     searched_addresses_ct = len(searched_addresses)
-    try:
-        assert searched_addresses_ct > 0
-    except:
-        print('ERROR: len 0 searched addresses list passed to write_party_searched_county()')
-        return
-    
     with open('partly_searched_temp.txt', 'a') as partly_searched_f:
         partly_searched_f.write(f'{county}:')
         for i in range(searched_addresses_ct - 1):
@@ -608,11 +681,13 @@ def write_partly_searched_county(county, searched_addresses):
         partly_searched_f.write(f'{searched_addresses[searched_addresses_ct - 1]}\n')
     return
 
-def wait_for_input_to_exit(queue):
+def wait_for_input_to_exit(queue, lock):
     input()
+    lock.acquire()
     ret = queue.get()
     ret['exit'] = True
     queue.put(ret)
+    lock.release()
 
 ret = {'exit': False}
 
@@ -622,17 +697,19 @@ if __name__ == '__main__':
     queue = Queue()
     queue.put(ret)
     output_lock = Lock()
-    Process(target=wait_for_input_to_exit, args=(queue,)).start()
+    ret['partly_searched'] = county_data.partly_searched
 
     options = webdriver.ChromeOptions()
     options.add_argument('disable-gpu')
     search_processes = []
     drivers = []
 
+    accounts = AccountDispenser()
+
     f = open('partly_searched_temp.txt', 'w')
     f.close()
 
-    for i in range(4):
+    for i in range(5):
         cnty_data, is_partly_searched = county_data.get_random_county()
         if is_partly_searched:
             county = cnty_data[0]
@@ -640,12 +717,14 @@ if __name__ == '__main__':
         else:
             county = cnty_data
             prev_searched_addresses = []
-        driver = get_driver(county)
+        user_pass = accounts.get_user_pass()
+        driver = get_driver(county, user_pass)
         drivers.append(driver)
         p = Process(target=search_county, args=(county, driver, prev_searched_addresses, output_lock, queue))
         p.start()
         search_processes.append(p)
 
+    Process(target=wait_for_input_to_exit, args=(queue,output_lock)).start()
     while True:
         time.sleep(5)
         ret = queue.get()
@@ -663,11 +742,12 @@ if __name__ == '__main__':
                 else:
                     county = cnty_data
                     prev_searched_addresses = []
-                drivers[i] = get_driver(county, drivers[i], True)
+                drivers[i] = get_driver(county, None, drivers[i], True)
                 search_processes[i] = Process(target=search_county, args=(county, drivers[i], prev_searched_addresses, output_lock, queue))
                 search_processes[i].start()
     
     for driver in drivers:
         driver.close()
+    input('Press enter once all windows are closed')
     county_data.rewrite_county_files_on_exit()
     print('Fin')
