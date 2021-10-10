@@ -10,7 +10,10 @@ import numpy as np
 import os
 import datetime
 
+import http.client
+import socket
 from selenium import webdriver
+from selenium.webdriver.remote.command import Command 
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support.ui import Select
@@ -21,15 +24,13 @@ from selenium.common.exceptions import WebDriverException
 from selenium.common.exceptions import ElementClickInterceptedException
 from selenium.common.exceptions import StaleElementReferenceException
 from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchWindowException
 from selenium.webdriver.common.action_chains import ActionChains
 
 from multiprocessing.dummy import Process, Lock, Queue
 
-# NOTE: zips originally written to unsearched_zips.txt have a population of at
-# least 100, which I believe (though I need to investigate) corresponds to
-# the 5th percentile of zip code populations
-# TODO: NEED thread waiting for input so a quit command can be given and
-# exit data can be written, such as rewriting searched and partly searched files
+# TODO function for error/success reporting including county name
+# less printing, only print when something important happens
 
 class WaitData:
     def __init__(self):
@@ -53,18 +54,18 @@ class WaitData:
             self.select_wait_sd,
             self.waits_n
         ))
-        self.select_waits.iloc[self.mouseover_waits < 0.05] = 0.05
+        self.select_waits.iloc[self.mouseover_waits < 0.1] = 0.1
         self.select_waits = np.array(self.select_waits)
         self.swaits_i = 0
 
-        self.typekeys_wait_mean = 0.03
-        self.typekeys_wait_sd = 0.02
+        self.typekeys_wait_mean = 0.05
+        self.typekeys_wait_sd = 0.03
         self.typekeys_waits = pd.DataFrame(np.random.normal(
             self.typekeys_wait_mean,
             self.typekeys_wait_sd,
             self.waits_n
         ))
-        self.typekeys_waits.iloc[self.typekeys_waits < 0.01] = 0.01
+        self.typekeys_waits.iloc[self.typekeys_waits < 0.03] = 0.03
         self.typekeys_waits = np.array(self.typekeys_waits)
         self.typekeys_i = 0
 
@@ -136,10 +137,13 @@ class CountyData:
             write_partly_searched_county(ps[0], ps[1])
         os.remove('partly_searched_counties.txt')
         os.rename('partly_searched_temp.txt', 'partly_searched_counties.txt')
-        with open('unsearched_counties.txt', 'w') as unsearched_f:
-            for i in range(len(self.unsearched) - 1):
-                unsearched_f.write(f'{self.unsearched[i]}\n')
-            unsearched_f.write(f'{self.unsearched[-1]}')
+        unsearched_len = len(self.unsearched)
+        if unsearched_len > 0:
+            with open('unsearched_counties.txt', 'w') as unsearched_f:
+                if unsearched_len > 1:
+                    for i in range(len(self.unsearched) - 1):
+                        unsearched_f.write(f'{self.unsearched[i]}\n')
+                unsearched_f.write(f'{self.unsearched[-1]}')
 
 class AccountDispenser:
     def __init__(self):
@@ -199,46 +203,53 @@ def do_wait(w_type):
         print('ERROR @ do_wait(): bad argument passed')
     time.sleep(wait_time[0])
 
+def is_alive(driver):
+    try:
+        driver.execute(Command.STATUS)
+        return True
+    except (socket.error, http.client.CannotSendRequest):
+        return False
+
 # remember to close driver on exit or before getting a new one
 max_wait = 30
 def get_driver(county, user_pass=None, driver=None, short_wait=False):
     if driver is None:
         driver = webdriver.Chrome()
     driver.get('http://www.zillow.com')
-    if user_pass is not None:
-        try:
-            do_wait(Wait.w_select)
-            sign_in_link = WebDriverWait(driver, max_wait).until(expected_conditions.presence_of_element_located(
-                (By.PARTIAL_LINK_TEXT, 'Sign in')
-            ))
-            driver.execute_script('arguments[0].click();', sign_in_link)
-            print(sign_in_link)
+    # if user_pass is not None:
+    #     try:
+    #         do_wait(Wait.w_select)
+    #         sign_in_link = WebDriverWait(driver, max_wait).until(expected_conditions.presence_of_element_located(
+    #             (By.PARTIAL_LINK_TEXT, 'Sign in')
+    #         ))
+    #         driver.execute_script('arguments[0].click();', sign_in_link)
+    #         print(sign_in_link)
 
-            do_wait(Wait.w_medium)
-            google_btn = driver.find_element_by_xpath('//button[text()="Continue with Google"]')
-            print(google_btn)
-            driver.execute_script('arguments[0].click();', google_btn)
+    #         do_wait(Wait.w_medium)
+    #         google_btn = driver.find_element_by_xpath('//button[text()="Continue with Google"]')
+    #         print(google_btn)
+    #         driver.execute_script('arguments[0].click();', google_btn)
 
-            do_wait(Wait.w_medium)
-            print(driver.window_handles)
-            driver.switch_to_window(driver.window_handles[1])
+    #         do_wait(Wait.w_medium)
+    #         print(driver.window_handles)
+    #         driver.switch_to_window(driver.window_handles[1])
 
-            email_box = WebDriverWait(driver, max_wait).until(expected_conditions.presence_of_element_located(
-                (By.XPATH, '//input[@type="email"]')
-            ))
-            driver.execute_script('arguments[0].click();', email_box)
-            do_wait(Wait.w_select)
-            for c in user_pass[0]:
-                email_box.send_keys(c)
-                do_wait(Wait.w_typekeys)
-            do_wait(Wait.w_typekeys)
-            email_box.send_keys(Keys.RETURN)
-            input('hit enter when done logging in')
+    #         email_box = WebDriverWait(driver, max_wait).until(expected_conditions.presence_of_element_located(
+    #             (By.XPATH, '//input[@type="email"]')
+    #         ))
+    #         driver.execute_script('arguments[0].click();', email_box)
+    #         do_wait(Wait.w_select)
+    #         for c in user_pass[0]:
+    #             email_box.send_keys(c)
+    #             do_wait(Wait.w_typekeys)
+    #         do_wait(Wait.w_typekeys)
+    #         email_box.send_keys(Keys.RETURN)
+    #         input('hit enter when done logging in')
             
-            driver.switch_to_window(driver.window_handles[0])
-        except:
-            print('ERROR @ get_driver(): login failed returning')
-            return
+    #         driver.switch_to_window(driver.window_handles[0])
+    #     except:
+    #         print('ERROR @ get_driver(): login failed returning')
+    #         return
     try:
         search_box = WebDriverWait(driver, max_wait).until(expected_conditions.presence_of_element_located(
             (By.XPATH, '//input[@type="text"]')
@@ -333,7 +344,7 @@ def try_close_lightbox(driver):
         except:
             return False
 
-def record_home_data(county, driver, lock):
+def record_home_data(county, address_head, driver, lock):
     months = [
         'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
         'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
@@ -341,10 +352,12 @@ def record_home_data(county, driver, lock):
     file_first_year = 2011
     file_start_index = 0
     do_wait(Wait.w_select)
-    try:
-        page_source = driver.page_source
-        soup = bsoup(page_source, features='html.parser')
 
+    page_source = driver.page_source
+    soup = bsoup(page_source, features='html.parser')
+
+    ds_chip_address_id = False
+    try:
         address_chunk = soup.body.find('h1', attrs={'id': 'ds-chip-property-address'})
         address_spans = address_chunk.find_all('span', recursive=False)
         street_address = address_spans[0].text.strip(',')
@@ -355,10 +368,28 @@ def record_home_data(county, driver, lock):
         state_zc = address_remainder[city_end_i+1:].split()
         state = state_zc[0]
         zc = state_zc[1]
-    except Exception as e:
-        print('ERROR @ record_home_data(): unable to get address data')
-        print(e)
-        return False
+    except:
+        ds_chip_address_id = False
+    
+    if not ds_chip_address_id and address_head is not None:
+        try:
+            elements = soup.body.find_all('h1', recursive=True)
+            for element in elements:
+                txt = element.text
+                if address_head in txt:
+                    street_address_end = txt.find(',')
+                    city_end = txt[street_address_end+1:].find(',') + street_address_end + 1
+                    state_zip = txt[city_end+1:].strip(' ').split(' ')
+
+                    street_address = txt[:street_address_end]
+                    city = txt[street_address_end+1:city_end].strip()
+                    state = state_zip[0]
+                    zc = state_zip[1]
+                    break
+        except Exception as e:
+            print('ERROR @ record_home_data(): unable to get address data')
+            print(e)
+            return False
 
     try:
         zestimates = []
@@ -411,8 +442,15 @@ def record_home_data(county, driver, lock):
         return False
 
     try:
-        components_chunk = soup.body.find('span', attrs={'class': 'ds-bed-bath-living-area-container'})
-        components_spans = components_chunk.find_all('span', recursive=True)
+        ds_bed_bath_container = True
+        try:
+            components_chunk = soup.body.find('span', attrs={'class': 'ds-bed-bath-living-area-container'})
+            components_spans = components_chunk.find_all('span', recursive=True)
+        except:
+            ds_bed_bath_container = False
+        if not ds_bed_bath_container:
+            components_chunk = soup.body.find('ul', attrs={'class': 'ds-home-fact-list'})
+            components_spans = components_chunk.find_all('span', recursive=True)
         beds = 'NA'
         baths = 'NA'
         sqft = 'NA'
@@ -544,10 +582,10 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
     properties_ct = len(properties)
     county_short = county[:county.find('County')-1]
 
+    searched_addresses = []
     if properties_ct > 2:
-        cur_page = 0        
         for i in range(2):
-            # Get the number of pages of property cards
+            cur_page = 0        
             try:
                 page_source = driver.page_source
                 soup = bsoup(page_source, features='html.parser')
@@ -565,16 +603,19 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
             while cur_page < page_ct:
                 cards = driver.find_elements_by_class_name('list-card')
                 max_hover_ct = 7 if 7 < properties_ct else properties_ct
-                searched_addresses = []
                 successive_failures = 0
 
                 # ... and all property cards
                 for j in range(len(cards)):
                     # Must repopulate this list at least every few iterations while scrolling down
                     # because in the HTML, list indices are created but not populated til you scroll near it
-
-                    if successive_failures == 2:
-                        print("ERROR @ search_county(): Exiting search after 3 successive failures.")
+                    driver_alive = True
+                    if not is_alive(driver):
+                        do_wait(Wait.w_long)
+                        if not is_alive(driver):
+                            driver_alive = False
+                    if successive_failures == 2 or not driver_alive:
+                        print("ERROR @ search_county(): Exiting search after 2 successive failures.")
                         prev_searched_addresses.extend(searched_addresses)
                         lock.acquire()
                         try:
@@ -595,6 +636,8 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                         card = cards[j]
                     except:
                         print("ERROR @ search_counties(): can't grab list card")
+                    
+                    address_head = None
                     try:
                         driver.execute_script('arguments[0].scrollIntoView(true);', card)
                         do_wait(Wait.w_mouseover)
@@ -605,6 +648,9 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                         address_text_end = address_link[:-1].rfind('/')
                         address_text_begin = address_link[:address_text_end].rfind('/') + 1
                         address = address_link[address_text_begin:address_text_end]
+
+                        address_head = address[:10].replace('-', ' ')
+
                         print(address)
                         if address in prev_searched_addresses:
                             continue
@@ -619,7 +665,7 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                         print("ERROR @ search_county(): couldn't click on property card")
                     try:
                         get_table_success = try_get_table(driver, max_wait)
-                        record_data_success = record_home_data(county_short, driver, lock)
+                        record_data_success = record_home_data(county_short, address_head, driver, lock)
                         lightbox_close_success = try_close_lightbox(driver)
                         
                         if not lightbox_close_success:
@@ -640,6 +686,7 @@ def search_county(county, driver, prev_searched_addresses, lock, queue):
                         partly_searched = ret['partly_searched']
                         partly_searched.append((county, prev_searched_addresses))
                         queue.put(ret)
+                        lock.release()
                         return
                     queue.put(ret)
                     lock.release()
@@ -709,7 +756,7 @@ if __name__ == '__main__':
     f = open('partly_searched_temp.txt', 'w')
     f.close()
 
-    for i in range(5):
+    for i in range(4):
         cnty_data, is_partly_searched = county_data.get_random_county()
         if is_partly_searched:
             county = cnty_data[0]
@@ -727,11 +774,14 @@ if __name__ == '__main__':
     Process(target=wait_for_input_to_exit, args=(queue,output_lock)).start()
     while True:
         time.sleep(5)
+        output_lock.acquire()
         ret = queue.get()
         if ret['exit']:
             queue.put(ret)
+            output_lock.release()
             break
         queue.put(ret)
+        output_lock.release()
         for i in range(len(search_processes)):
             p = search_processes[i]
             if not p.is_alive():
@@ -742,12 +792,22 @@ if __name__ == '__main__':
                 else:
                     county = cnty_data
                     prev_searched_addresses = []
-                drivers[i] = get_driver(county, None, drivers[i], True)
+                try:
+                    drivers[i] = get_driver(county, None, drivers[i], True)
+                except (NoSuchWindowException, WebDriverException):
+                    try:
+                        drivers[i].close()
+                    except:
+                        pass
+                    drivers[i] = get_driver(county)
                 search_processes[i] = Process(target=search_county, args=(county, drivers[i], prev_searched_addresses, output_lock, queue))
                 search_processes[i].start()
     
     for driver in drivers:
-        driver.close()
+        try:
+            driver.close()
+        except:
+            pass
     input('Press enter once all windows are closed')
     county_data.rewrite_county_files_on_exit()
     print('Fin')
